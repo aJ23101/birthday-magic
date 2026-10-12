@@ -41,6 +41,8 @@ export default function DashboardPage() {
   const [emailCounts, setEmailCounts] = useState<Awaited<ReturnType<typeof getUserEmailDashboardData>>>({
     total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [],
   });
+  const [emailDataLoaded, setEmailDataLoaded] = useState(false);
+  const [emailDataError, setEmailDataError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'updated'>('newest');
@@ -59,6 +61,8 @@ export default function DashboardPage() {
   const loadWishes = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    setEmailDataError(null);
+    setEmailDataLoaded(false);
     try {
       if (isSupabaseConfigured && supabase) {
         const { data: { user }, error } = await supabase.auth.getUser();
@@ -67,13 +71,31 @@ export default function DashboardPage() {
           setUserEmail(null);
           setWishes([]);
           setEmailCounts({ total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [] });
+          setEmailDataLoaded(false);
           return;
         }
         setUserEmail(user.email || null);
         setAccountName(typeof user.user_metadata.full_name === 'string' ? user.user_metadata.full_name : '');
-        const [data, sends] = await Promise.all([getUserWishes(), getUserEmailDashboardData()]);
+        const [wishesResult, emailResult] = await Promise.allSettled([getUserWishes(), getUserEmailDashboardData()]);
+        if (wishesResult.status === 'rejected') throw wishesResult.reason;
+        const data = wishesResult.value;
         setWishes(data);
-        setEmailCounts(sends);
+        if (emailResult.status === 'fulfilled') {
+          setEmailCounts(emailResult.value);
+          setEmailDataLoaded(true);
+          setEmailDataError(null);
+        } else {
+          console.error('Could not load birthday email and schedule history:', emailResult.reason);
+          setEmailDataLoaded(false);
+          const errorCode = typeof emailResult.reason === 'object' && emailResult.reason !== null && 'code' in emailResult.reason
+            ? String(emailResult.reason.code)
+            : '';
+          setEmailDataError(
+            ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(errorCode)
+              ? 'Email history is not available because the database update is missing. Apply the scheduled-email migration (202610120002_scheduled_birthday_email.sql) in Supabase, then reload this page.'
+              : 'Your birthday pages loaded, but email and scheduled-delivery history could not be loaded. Check the connection and reload.',
+          );
+        }
         return;
       }
 
@@ -81,7 +103,12 @@ export default function DashboardPage() {
       setWishes(data);
     } catch (err) {
       console.error(err);
-      setLoadError('We could not load your account history. Please try again.');
+      const errorCode = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : '';
+      setLoadError(
+        ['42P01', '42703', 'PGRST204', 'PGRST205'].includes(errorCode)
+          ? 'Your account database schema is incomplete. Run the BirthdayMagic Supabase schema and migrations, then reload the dashboard.'
+          : 'We could not load your account history. Check your Supabase connection and try again.',
+      );
     } finally {
       setLoading(false);
     }
@@ -362,15 +389,16 @@ export default function DashboardPage() {
         </div>
 
         {loadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{loadError} <button type="button" onClick={() => void loadWishes()} className="ml-2 font-bold underline">Retry</button></div>}
+        {emailDataError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{emailDataError} <button type="button" onClick={() => void loadWishes()} className="ml-2 font-bold underline">Retry</button></div>}
 
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Birthday dashboard statistics">
           {[
             { label: 'Total Surprises Created', value: wishes.length, icon: <Gift className="h-4 w-4" />, color: 'bg-pink-100 text-pink-600' },
             { label: 'Published Websites', value: publishedCount, icon: <ExternalLink className="h-4 w-4" />, color: 'bg-emerald-100 text-emerald-600' },
-            { label: 'Emails Accepted', value: emailCounts.total, icon: <Mail className="h-4 w-4" />, color: 'bg-amber-100 text-amber-600' },
-            { label: 'Scheduled Emails', value: emailCounts.scheduled, icon: <Clock3 className="h-4 w-4" />, color: 'bg-blue-100 text-blue-600' },
-            { label: 'Failed Attempts', value: emailCounts.failedAttempts, icon: <Mail className="h-4 w-4" />, color: 'bg-rose-100 text-rose-600' },
-            { label: 'Delivered', value: emailCounts.delivered, icon: <Check className="h-4 w-4" />, color: 'bg-emerald-100 text-emerald-600' },
+            { label: 'Emails Accepted', value: emailDataLoaded ? emailCounts.total : '—', icon: <Mail className="h-4 w-4" />, color: 'bg-amber-100 text-amber-600' },
+            { label: 'Scheduled Emails', value: emailDataLoaded ? emailCounts.scheduled : '—', icon: <Clock3 className="h-4 w-4" />, color: 'bg-blue-100 text-blue-600' },
+            { label: 'Failed Attempts', value: emailDataLoaded ? emailCounts.failedAttempts : '—', icon: <Mail className="h-4 w-4" />, color: 'bg-rose-100 text-rose-600' },
+            { label: 'Delivered', value: emailDataLoaded ? emailCounts.delivered : '—', icon: <Check className="h-4 w-4" />, color: 'bg-emerald-100 text-emerald-600' },
             { label: 'Total Views', value: totalViews, icon: <Eye className="h-4 w-4" />, color: 'bg-purple-100 text-purple-600' },
           ].map((metric) => (
             <div key={metric.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
