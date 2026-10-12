@@ -212,9 +212,9 @@ export const VibeCreatorStudio: React.FC<VibeCreatorStudioProps> = ({ onWishCrea
     };
 
     try {
-      await saveWish(newWish);
-      onWishCreated(newWish);
-      router.push(`/editor?id=${newWish.id}`);
+      const savedWish = await saveWish(newWish);
+      onWishCreated(savedWish);
+      router.push(`/editor?id=${savedWish.id}`);
     } catch (err) {
       console.error(err);
       router.push(`/editor`);
@@ -515,4 +515,3 @@ export const VibeCreatorStudio: React.FC<VibeCreatorStudioProps> = ({ onWishCrea
     </div>
   );
 };
-

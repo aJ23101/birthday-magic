@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -9,6 +9,7 @@ import { BirthdayWishData, TemplateType } from '@/types/birthday';
 import { saveWish, generateSlug, uploadMediaFile } from '@/lib/storage';
 import { triggerConfettiBurst } from '@/lib/confetti';
 import { birthdayAudio } from '@/lib/audio';
+import { supabase } from '@/lib/supabase';
 import {
   Gift,
   Sparkles,
@@ -38,6 +39,24 @@ import {
 export default function HomePage() {
   const router = useRouter();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getUser().then(({ data: { user } }) => setUserEmail(user?.email || null));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserEmail(session?.user.email || null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleSignOut = async () => {
+    if (!supabase) return;
+    const { error } = await supabase.auth.signOut();
+    if (error) console.error('Could not sign out from BirthdayMagic:', error);
+    else setProfileMenuOpen(false);
+  };
 
   // Quick Creation Form State
   const [recipientName, setRecipientName] = useState('Maya');
@@ -127,15 +146,15 @@ export default function HomePage() {
       enableTimeline: true,
       enableSecretNote: true,
       enableSoundFx: true,
-      isPublished: true,
-      viewsCount: 1,
+      isPublished: false,
+      viewsCount: 0,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     try {
-      await saveWish(newWish);
-      router.push(`/editor?id=${newWish.id}`);
+      const savedWish = await saveWish(newWish);
+      router.push(`/editor?id=${savedWish.id}`);
     } catch {
       router.push('/editor');
     } finally {
@@ -175,6 +194,7 @@ export default function HomePage() {
               <span>My Creations</span>
               <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
             </Link>
+            {!userEmail && <Link href="/login" className="hover:text-rose-600 transition-colors">Login / Sign Up</Link>}
           </div>
 
           {/* Nav Right CTA */}
@@ -185,6 +205,27 @@ export default function HomePage() {
             >
               Dashboard
             </Link>
+            {userEmail ? (
+              <div className="relative">
+                <button type="button" onClick={() => setProfileMenuOpen((open) => !open)} aria-expanded={profileMenuOpen} className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 hover:border-rose-300">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-rose-100 text-rose-600">{userEmail.slice(0, 1).toUpperCase()}</span>
+                  <span>My Account</span>
+                </button>
+                {profileMenuOpen && (
+                  <div className="absolute right-0 top-full z-50 mt-2 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                    <p className="truncate px-3 py-2 text-xs text-slate-500">{userEmail}</p>
+                    <Link href="/dashboard" className="block rounded-lg px-3 py-2 text-sm font-semibold hover:bg-rose-50">Dashboard</Link>
+                    <Link href="/dashboard#surprises" className="block rounded-lg px-3 py-2 text-sm font-semibold hover:bg-rose-50">My Creations</Link>
+                    <Link href="/dashboard#account" className="block rounded-lg px-3 py-2 text-sm font-semibold hover:bg-rose-50">Account Settings</Link>
+                    <button type="button" onClick={() => void handleSignOut()} className="w-full rounded-lg px-3 py-2 text-left text-sm font-semibold text-rose-600 hover:bg-rose-50">Logout</button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Link href="/login" className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:border-slate-300 shadow-xs transition-colors">
+                Login / Sign Up
+              </Link>
+            )}
             <a
               href="#create"
               className="px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 shadow-md shadow-rose-500/25 transition-all hover:scale-102 active:scale-98 flex items-center gap-1.5"
@@ -230,6 +271,16 @@ export default function HomePage() {
             >
               My Creations
             </Link>
+            {userEmail ? (
+              <>
+                <Link href="/dashboard#account" onClick={() => setMobileMenuOpen(false)} className="block text-sm font-semibold text-slate-700 py-1">Account Settings ({userEmail})</Link>
+                <button type="button" onClick={() => { setMobileMenuOpen(false); void handleSignOut(); }} className="block text-sm font-semibold text-rose-600 py-1">Logout</button>
+              </>
+            ) : (
+              <Link href="/login" onClick={() => setMobileMenuOpen(false)} className="block text-sm font-semibold text-slate-700 py-1">
+                Login / Sign Up
+              </Link>
+            )}
             <Link
               href="/editor"
               onClick={() => setMobileMenuOpen(false)}

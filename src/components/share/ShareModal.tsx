@@ -12,22 +12,31 @@ import {
   Share2,
   Heart,
   MessageCircle,
+  Mail,
+  LoaderCircle,
 } from 'lucide-react';
 import { BirthdayWishData } from '@/types/birthday';
+import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
   wish: BirthdayWishData;
+  onEmailSent?: () => void;
 }
 
 export const ShareModal: React.FC<ShareModalProps> = ({
   isOpen,
   onClose,
   wish,
+  onEmailSent,
 }) => {
   const [copied, setCopied] = useState(false);
   const [showQr, setShowQr] = useState(false);
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -45,6 +54,49 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   };
 
   const shareText = `🎉 Hey ${wish.recipientName}! I created an exclusive personalized birthday surprise website just for you! Open your gift box here: ${shareUrl} 🎁✨`;
+
+  const sendEmail = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setEmailStatus(null);
+    if (!supabase) {
+      setEmailStatus('Email sharing requires account and server configuration.');
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!session) {
+        setEmailStatus('Sign in to send and track birthday emails.');
+        return;
+      }
+      const response = await fetch(`/api/birthday-pages/${encodeURIComponent(wish.id)}/email`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ recipientEmail }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const errorMessage =
+          typeof result === 'object' && result !== null && 'error' in result && typeof result.error === 'string'
+            ? result.error
+            : 'The email could not be sent.';
+        throw new Error(errorMessage);
+      }
+      setEmailStatus('Email accepted by the provider and recorded in your dashboard.');
+      setRecipientEmail('');
+      onEmailSent?.();
+    } catch (sendError: unknown) {
+      const message = sendError instanceof Error ? sendError.message : 'The email could not be sent.';
+      setEmailStatus(message);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
 
   const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(
     shareText
@@ -135,6 +187,35 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               </button>
             </div>
           </div>
+
+          <form onSubmit={sendEmail} className="mb-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <label htmlFor="birthday-recipient-email" className="mb-2 block text-xs font-bold uppercase tracking-wider text-slate-500">
+              Send by email
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="birthday-recipient-email"
+                type="email"
+                required
+                value={recipientEmail}
+                onChange={(event) => setRecipientEmail(event.target.value)}
+                placeholder="recipient@example.com"
+                className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+              />
+              <button
+                type="submit"
+                disabled={isSendingEmail || !wish.isPublished}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2 text-xs font-bold text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSendingEmail ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                Send
+              </button>
+            </div>
+            {emailStatus && <p role="status" className="mt-2 text-xs text-slate-600">{emailStatus}</p>}
+            {!wish.isPublished && <p className="mt-2 text-xs text-amber-700">Publish this birthday website before emailing its link.</p>}
+            {!supabase && <p className="mt-2 text-xs text-slate-500">Email sends are unavailable in local-only mode.</p>}
+            {emailStatus?.includes('Sign in') && <Link href="/login" className="mt-2 inline-block text-xs font-bold text-rose-600 hover:underline">Login / Sign Up</Link>}
+          </form>
 
           {/* Primary Share Buttons */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">

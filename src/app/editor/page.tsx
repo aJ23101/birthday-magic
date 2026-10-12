@@ -9,6 +9,7 @@ import { EditorSidebar } from '@/components/editor/EditorSidebar';
 import { LivePreviewFrame } from '@/components/editor/LivePreviewFrame';
 import { ShareModal } from '@/components/share/ShareModal';
 import { triggerConfettiBurst } from '@/lib/confetti';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import {
   Sparkles,
   Save,
@@ -31,7 +32,13 @@ function EditorContent() {
   const templateParam = searchParams.get('template') as TemplateType | null;
 
   const [wish, setWish] = useState<BirthdayWishData>(() => {
-    const base = { ...INITIAL_WISH_DATA, id: `wish-${Date.now()}` };
+    const base = {
+      ...INITIAL_WISH_DATA,
+      id: `wish-${Date.now()}`,
+      slug: generateSlug(INITIAL_WISH_DATA.recipientName),
+      isPublished: false,
+      viewsCount: 0,
+    };
     if (templateParam) {
       const tDef = TEMPLATES.find((t) => t.id === templateParam);
       if (tDef) {
@@ -93,8 +100,11 @@ function EditorContent() {
   const handleSaveDraft = async () => {
     setIsSaving(true);
     try {
-      await saveWish(wish);
-      showToast('Draft saved successfully! 💾');
+      const savedWish = await saveWish(wish);
+      setWish(savedWish);
+      showToast(isSupabaseConfigured && !savedWish.userId
+        ? 'Draft saved on this device. Log in to sync it across devices.'
+        : 'Draft saved successfully! 💾');
     } catch (err) {
       console.error(err);
       showToast('Error saving draft');
@@ -106,15 +116,27 @@ function EditorContent() {
   const handlePublish = async () => {
     setIsSaving(true);
     try {
+      if (isSupabaseConfigured && supabase) {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (error) throw error;
+        if (!user) {
+          await saveWish({ ...wish, isPublished: false });
+          showToast('Draft saved on this device. Log in to publish and sync it.');
+          router.push('/login');
+          return;
+        }
+      }
+
       triggerConfettiBurst();
       const finalSlug = wish.slug || generateSlug(wish.recipientName || 'birthday');
       const publishedWish = {
         ...wish,
         slug: finalSlug,
         isPublished: true,
+        publishedAt: wish.publishedAt || new Date().toISOString(),
       };
-      setWish(publishedWish);
-      await saveWish(publishedWish);
+      const savedWish = await saveWish(publishedWish);
+      setWish(savedWish);
       setIsShareModalOpen(true);
     } catch (err) {
       console.error(err);

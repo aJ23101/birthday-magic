@@ -100,14 +100,22 @@ Fill in your Supabase credentials:
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_APP_URL=http://localhost:3000
+SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
+RESEND_API_KEY=your-resend-api-key
+RESEND_FROM_EMAIL="BirthdayMagic <birthday@your-verified-domain.com>"
 ```
 > **Note:** The application includes automatic local fallback. If Supabase keys are not set, it uses `localStorage` for drafts and Base64 for images, allowing you to run and test everything out of the box!
+>
+> Keep `SUPABASE_SERVICE_ROLE_KEY` and `RESEND_API_KEY` server-only. Never expose them with a `NEXT_PUBLIC_` prefix.
 
 ### 4. Database Setup (Supabase)
 To enable multi-device sync, open your Supabase project's **SQL Editor** and run the provided SQL script:
 ```bash
 supabase/schema.sql
 ```
+Then run [`supabase/migrations/202610120001_auth_dashboard.sql`](./supabase/migrations/202610120001_auth_dashboard.sql) in the SQL Editor to add account profiles, ownership-safe row-level security, archived/published timestamps, and private email-send history. New accounts use Supabase Auth; configure the Supabase Auth email templates and allowed redirect URLs for signup verification and password recovery.
+
+Email sharing is sent through Resend. Verify the sender domain/address in Resend and set `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and the server-only Supabase service-role key in the deployment environment. The dashboard counts only emails accepted by Resend; delivery confirmation is not configured.
 This automatically sets up:
 - The `wishes` table with indexing on `slug`
 - Row-Level Security (RLS) policies

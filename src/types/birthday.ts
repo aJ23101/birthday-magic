@@ -36,6 +36,8 @@ export interface BirthdayWishData {
   slug: string;
   userId?: string;
   isPublished: boolean;
+  isArchived?: boolean;
+  publishedAt?: string;
   viewsCount: number;
   createdAt: string;
   updatedAt: string;

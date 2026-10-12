@@ -3,6 +3,79 @@ import { supabase, isSupabaseConfigured } from './supabase';
 import { INITIAL_WISH_DATA, TEMPLATES } from '@/data/templates';
 
 const LOCAL_STORAGE_KEY = 'birthday_magic_wishes';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function fromDatabaseWish(row: Record<string, unknown>): BirthdayWishData {
+  return {
+    id: String(row.id),
+    slug: String(row.slug),
+    userId: typeof row.user_id === 'string' ? row.user_id : undefined,
+    isPublished: Boolean(row.is_published),
+    isArchived: Boolean(row.is_archived),
+    publishedAt: typeof row.published_at === 'string' ? row.published_at : undefined,
+    viewsCount: Number(row.views_count || 0),
+    createdAt: String(row.created_at || ''),
+    updatedAt: String(row.updated_at || ''),
+    recipientName: String(row.recipient_name || ''),
+    senderName: String(row.sender_name || ''),
+    relationship: String(row.relationship || ''),
+    birthDate: typeof row.birth_date === 'string' ? row.birth_date : undefined,
+    age: typeof row.age === 'number' || typeof row.age === 'string' ? row.age : undefined,
+    greetingHeader: String(row.greeting_header || ''),
+    mainMessage: String(row.main_message || ''),
+    secretNote: typeof row.secret_note === 'string' ? row.secret_note : undefined,
+    template: row.template as BirthdayWishData['template'],
+    primaryColor: String(row.primary_color || '#ec4899'),
+    fontStyle: row.font_style as BirthdayWishData['fontStyle'],
+    backgroundEffect: row.background_effect as BirthdayWishData['backgroundEffect'],
+    photos: Array.isArray(row.photos) ? row.photos as BirthdayWishData['photos'] : [],
+    timeline: Array.isArray(row.timeline) ? row.timeline as BirthdayWishData['timeline'] : [],
+    music: row.music as BirthdayWishData['music'],
+    enableGiftBox: Boolean(row.enable_gift_box),
+    enableCake: Boolean(row.enable_cake),
+    enableMakeAWish: Boolean(row.enable_make_a_wish),
+    enablePhotoGallery: Boolean(row.enable_photo_gallery),
+    enableTimeline: Boolean(row.enable_timeline),
+    enableSecretNote: Boolean(row.enable_secret_note),
+    enableSoundFx: Boolean(row.enable_sound_fx),
+  };
+}
+
+function toDatabaseWish(wish: BirthdayWishData, userId?: string) {
+  return {
+    ...(UUID_PATTERN.test(wish.id) ? { id: wish.id } : {}),
+    slug: wish.slug,
+    user_id: userId || wish.userId || null,
+    is_published: wish.isPublished,
+    is_archived: wish.isArchived || false,
+    published_at: wish.publishedAt || (wish.isPublished ? wish.updatedAt : null),
+    views_count: wish.viewsCount,
+    created_at: wish.createdAt,
+    updated_at: wish.updatedAt,
+    recipient_name: wish.recipientName,
+    sender_name: wish.senderName,
+    relationship: wish.relationship,
+    birth_date: wish.birthDate || null,
+    age: typeof wish.age === 'number' ? wish.age : Number(wish.age) || null,
+    greeting_header: wish.greetingHeader,
+    main_message: wish.mainMessage,
+    secret_note: wish.secretNote || null,
+    template: wish.template,
+    primary_color: wish.primaryColor,
+    font_style: wish.fontStyle,
+    background_effect: wish.backgroundEffect,
+    photos: wish.photos,
+    timeline: wish.timeline,
+    music: wish.music,
+    enable_gift_box: wish.enableGiftBox,
+    enable_cake: wish.enableCake,
+    enable_make_a_wish: wish.enableMakeAWish,
+    enable_photo_gallery: wish.enablePhotoGallery,
+    enable_timeline: wish.enableTimeline,
+    enable_secret_note: wish.enableSecretNote,
+    enable_sound_fx: wish.enableSoundFx,
+  };
+}
 
 // Initialize sample wishes in local storage if empty
 export function initLocalSampleWishes(): BirthdayWishData[] {
@@ -58,8 +131,9 @@ export async function getWishBySlug(slug: string): Promise<BirthdayWishData | nu
         .single();
 
       if (!error && data) {
-        return data as BirthdayWishData;
+        return fromDatabaseWish(data as Record<string, unknown>);
       }
+      if (error) throw error;
     } catch (e) {
       console.warn('Supabase fetch error, checking local storage fallback:', e);
     }
@@ -75,14 +149,16 @@ export async function getWishBySlug(slug: string): Promise<BirthdayWishData | nu
 export async function getWishById(id: string): Promise<BirthdayWishData | null> {
   if (isSupabaseConfigured && supabase) {
     try {
-      const { data, error } = await supabase
-        .from('wishes')
-        .select('*')
-        .eq('id', id)
-        .single();
+      if (UUID_PATTERN.test(id)) {
+        const { data, error } = await supabase
+          .from('wishes')
+          .select('*')
+          .eq('id', id)
+          .single();
 
-      if (!error && data) {
-        return data as BirthdayWishData;
+        if (!error && data) {
+          return fromDatabaseWish(data as Record<string, unknown>);
+        }
       }
     } catch (e) {
       console.warn('Supabase fetch error:', e);
@@ -102,22 +178,31 @@ export async function saveWish(wish: BirthdayWishData): Promise<BirthdayWishData
 
   // Save to Supabase if configured
   if (isSupabaseConfigured && supabase) {
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError) throw authError;
     try {
+      const pageToSave = {
+        ...updatedWish,
+        userId: user?.id || updatedWish.userId,
+      };
       const { data, error } = await supabase
         .from('wishes')
-        .upsert(updatedWish, { onConflict: 'id' })
+        .upsert(toDatabaseWish(pageToSave, user?.id), { onConflict: 'slug' })
         .select()
         .single();
 
       if (!error && data) {
+        const savedWish = fromDatabaseWish(data as Record<string, unknown>);
         // Also update local storage cache
-        updateLocalList(data as BirthdayWishData);
-        return data as BirthdayWishData;
+        updateLocalList(savedWish);
+        return savedWish;
       }
       if (error) {
+        if (user) throw error;
         console.warn('Supabase upsert returned error, falling back to local storage:', error.message);
       }
     } catch (e) {
+      if (user) throw e;
       console.warn('Supabase upsert exception:', e);
     }
   }
@@ -131,7 +216,7 @@ function updateLocalList(wish: BirthdayWishData) {
   if (typeof window === 'undefined') return;
   try {
     const list = initLocalSampleWishes();
-    const index = list.findIndex((w) => w.id === wish.id);
+    const index = list.findIndex((w) => w.id === wish.id || w.slug === wish.slug);
     if (index >= 0) {
       list[index] = wish;
     } else {
@@ -147,7 +232,8 @@ function updateLocalList(wish: BirthdayWishData) {
 export async function getUserWishes(): Promise<BirthdayWishData[]> {
   if (isSupabaseConfigured && supabase) {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
       if (user) {
         const { data, error } = await supabase
           .from('wishes')
@@ -155,25 +241,110 @@ export async function getUserWishes(): Promise<BirthdayWishData[]> {
           .eq('user_id', user.id)
           .order('updated_at', { ascending: false });
 
-        if (!error && data && data.length > 0) {
-          return data as BirthdayWishData[];
-        }
+        if (error) throw error;
+        return (data || []).map((row) => fromDatabaseWish(row as Record<string, unknown>));
       }
     } catch (e) {
-      console.warn('Supabase getUserWishes error:', e);
+      console.error('Could not load account birthday websites from Supabase:', e);
+      throw e;
     }
   }
 
   return initLocalSampleWishes();
 }
 
+export async function getUserAcceptedEmailCounts(): Promise<{
+  total: number;
+  byWish: Record<string, number>;
+  events: Array<{
+    id: string;
+    birthdayPageId: string;
+    recipientEmail: string;
+    status: string;
+    createdAt: string;
+    providerMessageId: string | null;
+  }>;
+}> {
+  if (!isSupabaseConfigured || !supabase) return { total: 0, byWish: {}, events: [] };
+
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!user) return { total: 0, byWish: {}, events: [] };
+
+  const { data, error } = await supabase
+    .from('birthday_send_events')
+    .select('id, birthday_page_id, recipient_email, status, created_at, provider_message_id')
+    .eq('user_id', user.id);
+
+  if (error) {
+    console.error('Could not load accepted birthday email history:', error);
+    throw error;
+  }
+
+  const byWish: Record<string, number> = {};
+  for (const event of data || []) {
+    if (event.status === 'accepted' || event.status === 'delivered') {
+      byWish[event.birthday_page_id] = (byWish[event.birthday_page_id] || 0) + 1;
+    }
+  }
+  const acceptedEvents = (data || []).filter((event) => event.status === 'accepted' || event.status === 'delivered');
+  return {
+    total: acceptedEvents.length,
+    byWish,
+    events: (data || []).map((event) => ({
+      id: event.id,
+      birthdayPageId: event.birthday_page_id,
+      recipientEmail: event.recipient_email,
+      status: event.status,
+      createdAt: event.created_at,
+      providerMessageId: event.provider_message_id,
+    })),
+  };
+}
+
+export async function importGuestWishes(): Promise<number> {
+  if (typeof window === 'undefined' || !isSupabaseConfigured || !supabase) return 0;
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!user) return 0;
+
+  const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+  if (!raw) return 0;
+  const stored: unknown = JSON.parse(raw);
+  if (!Array.isArray(stored)) return 0;
+
+  const guestWishes = stored.filter(
+    (item): item is BirthdayWishData =>
+      typeof item === 'object' &&
+      item !== null &&
+      'id' in item &&
+      typeof item.id === 'string' &&
+      !item.id.startsWith('preview-wish') &&
+      'slug' in item &&
+      typeof item.slug === 'string' &&
+      (!('userId' in item) || !item.userId || item.userId === user.id),
+  );
+
+  let imported = 0;
+  for (const wish of guestWishes) {
+    const saved = await saveWish({ ...wish, userId: user.id });
+    updateLocalList(saved);
+    imported += 1;
+  }
+  return imported;
+}
+
 // Delete wish
 export async function deleteWish(id: string): Promise<boolean> {
   if (isSupabaseConfigured && supabase) {
-    try {
-      await supabase.from('wishes').delete().eq('id', id);
-    } catch (e) {
-      console.warn('Supabase delete error:', e);
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError) throw authError;
+    if (user && UUID_PATTERN.test(id)) {
+      const { error } = await supabase.from('wishes').delete().eq('id', id);
+      if (error) {
+        console.error('Could not delete account birthday website:', error);
+        throw error;
+      }
     }
   }
 
