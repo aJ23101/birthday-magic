@@ -88,7 +88,7 @@ class BirthdayAudioEngine {
 
   private playTone(freq: number, duration: number, timeOffset: number) {
     const ctx = this.initContext();
-    if (!ctx || !this.masterGain || this.isMuted) return;
+    if (!ctx || !this.masterGain) return;
 
     try {
       const osc = ctx.createOscillator();
@@ -207,32 +207,24 @@ class BirthdayAudioEngine {
     if (this.audioElement) {
       this.audioElement.pause();
     }
+    this.currentCustomUrl = null;
 
     this.isPlaying = true;
     this.stopSynthesizer();
     this.notify();
 
-    if (this.isMuted) {
-      // If muted, keep isPlaying state true but don't output audio
-      return;
-    }
-
     const schedulePhrase = () => {
-      if (!this.isPlaying || this.isMuted) return;
+      if (!this.isPlaying) return;
 
       let currentTimeOffset = 0;
       this.happyBirthdayMelody.forEach((item) => {
         const freq = this.notes[item.note];
-        if (freq && !this.isMuted) {
-          this.playTone(freq, item.duration, currentTimeOffset);
-        }
+        if (freq) this.playTone(freq, item.duration, currentTimeOffset);
         currentTimeOffset += item.duration + item.pause;
       });
 
       this.timer = setTimeout(() => {
-        if (this.isPlaying && !this.isMuted) {
-          schedulePhrase();
-        }
+        if (this.isPlaying) schedulePhrase();
       }, currentTimeOffset * 1000);
     };
 
@@ -257,9 +249,8 @@ class BirthdayAudioEngine {
       .then(() => {
         this.isPlaying = true;
         this.notify();
-      })
-      .catch(() => {
-        // Fallback to synth if custom audio fails
+      }).catch((error: unknown) => {
+        console.warn('Custom birthday audio could not be played; using the built-in melody instead.', error);
         this.playLoop();
       });
   }
@@ -282,11 +273,21 @@ class BirthdayAudioEngine {
   }
 
   public resume(customAudioUrl?: string) {
+    if (customAudioUrl && customAudioUrl !== this.currentCustomUrl) {
+      this.playCustomAudio(customAudioUrl);
+      return;
+    }
+
     if (this.audioElement && this.currentCustomUrl) {
       this.audioElement.muted = this.isMuted;
-      this.audioElement.play().catch(() => {});
-      this.isPlaying = true;
-      this.notify();
+      this.audioElement.play().then(() => {
+        this.isPlaying = true;
+        this.notify();
+      }).catch((error: unknown) => {
+        this.isPlaying = false;
+        console.warn('Custom birthday audio could not be resumed.', error);
+        this.notify();
+      });
     } else {
       this.playLoop(customAudioUrl);
     }
@@ -298,21 +299,6 @@ class BirthdayAudioEngine {
     // Apply to master gain node immediately
     if (this.ctx && this.masterGain) {
       this.masterGain.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);
-    }
-
-    // If muted, immediately silence any currently vibrating oscillators
-    if (this.isMuted) {
-      this.stopAllActiveSources();
-      this.stopSynthesizer();
-    } else {
-      // If unmuted and supposed to be playing, resume audio playback
-      if (this.isPlaying) {
-        if (this.audioElement && this.currentCustomUrl) {
-          this.audioElement.muted = false;
-        } else {
-          this.playLoop();
-        }
-      }
     }
 
     if (this.audioElement) {

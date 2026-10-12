@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useSyncExternalStore } from 'react';
 import { motion } from 'framer-motion';
-import { Play, Pause, Volume2, VolumeX, Music } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
 import { birthdayAudio } from '@/lib/audio';
 import { BirthdayMusic } from '@/types/birthday';
 
@@ -11,26 +11,24 @@ interface MusicPlayerBarProps {
   primaryColor: string;
 }
 
+const subscribeToAudio = (callback: () => void) => birthdayAudio.subscribe(callback);
+const getAudioPlaying = () => birthdayAudio.getState().isPlaying;
+const getAudioMuted = () => birthdayAudio.getState().isMuted;
+
 export const MusicPlayerBar: React.FC<MusicPlayerBarProps> = ({
   music,
   primaryColor,
 }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-
-  useEffect(() => {
-    const unsub = birthdayAudio.subscribe(() => {
-      const state = birthdayAudio.getState();
-      setIsPlaying(state.isPlaying);
-      setIsMuted(state.isMuted);
-    });
-
-    const state = birthdayAudio.getState();
-    setIsPlaying(state.isPlaying);
-    setIsMuted(state.isMuted);
-
-    return () => unsub();
-  }, []);
+  const isPlaying = useSyncExternalStore(
+    subscribeToAudio,
+    getAudioPlaying,
+    () => false,
+  );
+  const isMuted = useSyncExternalStore(
+    subscribeToAudio,
+    getAudioMuted,
+    () => false,
+  );
 
   if (!music || !music.enabled) return null;
 
@@ -57,10 +55,12 @@ export const MusicPlayerBar: React.FC<MusicPlayerBarProps> = ({
       >
         {/* Play / Pause Round Button */}
         <button
+          type="button"
           onClick={togglePlay}
           className="w-10 h-10 rounded-full flex items-center justify-center text-white shadow-md transition-transform hover:scale-108 active:scale-95 cursor-pointer"
           style={{ backgroundColor: primaryColor || '#ec4899' }}
           title={isPlaying ? 'Pause Music' : 'Play Music'}
+          aria-label={isPlaying ? 'Pause music' : 'Play music'}
         >
           {isPlaying ? (
             <Pause className="w-4 h-4 fill-white" />
@@ -98,13 +98,16 @@ export const MusicPlayerBar: React.FC<MusicPlayerBarProps> = ({
 
           {/* Mute Button */}
           <button
+            type="button"
             onClick={toggleMute}
             className={`p-2 rounded-full transition-all cursor-pointer ${
               isMuted
                 ? 'bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 ring-1 ring-rose-500/50'
                 : 'hover:bg-slate-800 text-slate-300 hover:text-white'
             }`}
-            title={isMuted ? 'Click to Unmute Sound' : 'Click to Mute Sound'}
+            title={isMuted ? 'Unmute music' : 'Mute music'}
+            aria-label={isMuted ? 'Unmute music' : 'Mute music'}
+            aria-pressed={isMuted}
           >
             {isMuted ? (
               <VolumeX className="w-4 h-4 text-rose-400" />

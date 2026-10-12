@@ -198,6 +198,9 @@ export default function HomePage() {
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="md:hidden p-2 rounded-xl text-slate-700 hover:bg-white/80"
+            type="button"
+            aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={mobileMenuOpen}
           >
             {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
           </button>
@@ -263,8 +266,8 @@ export default function HomePage() {
 
             {/* Short Supporting Description */}
             <p className="text-base sm:text-lg text-slate-600 max-w-xl mx-auto lg:mx-0 leading-relaxed font-normal">
-              Design a breathtaking personalized birthday website with 3D gift-box unboxing,
-              interactive candle blowouts, photos, and birthday music. Share instantly through WhatsApp!
+              Create a personalized birthday website filled with photos, heartfelt messages, music,
+              and little surprises. No coding required.
             </p>
 
             {/* Action Buttons */}
@@ -386,32 +389,32 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* 3. STATISTICS & TRUST STRIP */}
+      {/* 3. PRODUCT BENEFITS */}
       <section className="py-8 bg-white border-y border-rose-100/80">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
             <div className="p-3">
-              <p className="text-3xl font-black text-rose-500">12,400+</p>
+              <p className="text-lg font-black text-rose-500">No coding</p>
               <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mt-1">
-                Celebrations Created
+                Required
               </p>
             </div>
             <div className="p-3">
-              <p className="text-3xl font-black text-amber-500">99.8%</p>
+              <p className="text-lg font-black text-amber-500">6 templates</p>
               <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mt-1">
-                Happy Tears & Smiles
+                Personalizable
               </p>
             </div>
             <div className="p-3">
-              <p className="text-3xl font-black text-purple-500">4.9 / 5</p>
+              <p className="text-lg font-black text-purple-500">Photos, music</p>
               <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mt-1">
-                Recipient Loved It
+                And heartfelt notes
               </p>
             </div>
             <div className="p-3">
-              <p className="text-3xl font-black text-teal-500">1-Click</p>
+              <p className="text-lg font-black text-teal-500">Shareable</p>
               <p className="text-xs font-bold text-slate-600 uppercase tracking-wider mt-1">
-                WhatsApp Delivery
+                Birthday websites
               </p>
             </div>
           </div>
@@ -576,6 +579,8 @@ export default function HomePage() {
                       key={color}
                       onClick={() => setPrimaryColor(color)}
                       style={{ backgroundColor: color }}
+                      aria-label={`Use ${color} as accent color`}
+                      aria-pressed={primaryColor === color}
                       className={`w-7 h-7 rounded-full transition-transform ${
                         primaryColor === color ? 'ring-2 ring-offset-2 ring-slate-800 scale-110' : ''
                       }`}
@@ -607,6 +612,7 @@ export default function HomePage() {
                     <button
                       type="button"
                       onClick={() => setUploadedPhotos((prev) => prev.filter((_, i) => i !== idx))}
+                      aria-label={`Remove photo ${idx + 1}`}
                       className="absolute top-1.5 right-1.5 p-1 rounded-full bg-black/60 text-white text-[10px] opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       ✕
