@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { BirthdayWishData } from '@/types/birthday';
-import { getUserAcceptedEmailCounts, getUserWishes, deleteWish, saveWish } from '@/lib/storage';
+import { getUserEmailDashboardData, getUserWishes, deleteWish, saveWish } from '@/lib/storage';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { ShareModal } from '@/components/share/ShareModal';
 import { VibeCreatorStudio } from '@/components/dashboard/VibeCreatorStudio';
@@ -30,6 +30,7 @@ import {
   Clock3,
 } from 'lucide-react';
 import Link from 'next/link';
+import { localDateTimeInZone, dateTimeInZoneToUtc } from '@/lib/schedule-time';
 
 export default function DashboardPage() {
   const [wishes, setWishes] = useState<BirthdayWishData[]>([]);
@@ -37,7 +38,9 @@ export default function DashboardPage() {
   const [selectedWishForShare, setSelectedWishForShare] = useState<BirthdayWishData | null>(null);
   const [filter, setFilter] = useState<'all' | 'published' | 'drafts' | 'archived'>('all');
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
-  const [emailCounts, setEmailCounts] = useState<Awaited<ReturnType<typeof getUserAcceptedEmailCounts>>>({ total: 0, byWish: {}, events: [] });
+  const [emailCounts, setEmailCounts] = useState<Awaited<ReturnType<typeof getUserEmailDashboardData>>>({
+    total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [],
+  });
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'updated'>('newest');
@@ -45,6 +48,10 @@ export default function DashboardPage() {
   const [detailsWish, setDetailsWish] = useState<BirthdayWishData | null>(null);
   const [accountName, setAccountName] = useState('');
   const [accountFeedback, setAccountFeedback] = useState<string | null>(null);
+  const [manageJob, setManageJob] = useState<Awaited<ReturnType<typeof getUserEmailDashboardData>>['jobs'][number] | null>(null);
+  const [manageDateTime, setManageDateTime] = useState('');
+  const [manageTimeZone, setManageTimeZone] = useState('UTC');
+  const [jobActionError, setJobActionError] = useState<string | null>(null);
 
   // Auth state
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -59,12 +66,12 @@ export default function DashboardPage() {
         if (!user) {
           setUserEmail(null);
           setWishes([]);
-          setEmailCounts({ total: 0, byWish: {}, events: [] });
+          setEmailCounts({ total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [] });
           return;
         }
         setUserEmail(user.email || null);
         setAccountName(typeof user.user_metadata.full_name === 'string' ? user.user_metadata.full_name : '');
-        const [data, sends] = await Promise.all([getUserWishes(), getUserAcceptedEmailCounts()]);
+        const [data, sends] = await Promise.all([getUserWishes(), getUserEmailDashboardData()]);
         setWishes(data);
         setEmailCounts(sends);
         return;
@@ -130,7 +137,7 @@ export default function DashboardPage() {
       }
       setUserEmail(null);
       setWishes([]);
-      setEmailCounts({ total: 0, byWish: {}, events: [] });
+      setEmailCounts({ total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [] });
     }
   };
 
@@ -158,9 +165,58 @@ export default function DashboardPage() {
   };
 
   const totalViews = wishes.reduce((acc, wish) => acc + (
-    wish.isPublished && !wish.isArchived ? wish.viewsCount || 0 : 0
+    wish.isPublished ? wish.viewsCount || 0 : 0
   ), 0);
-  const publishedCount = wishes.filter((wish) => wish.isPublished && !wish.isArchived).length;
+  const publishedCount = wishes.filter((wish) => wish.isPublished).length;
+  const latestEmailJobByWish = new Map<string, typeof emailCounts.jobs[number]>();
+  for (const job of emailCounts.jobs) {
+    if (!latestEmailJobByWish.has(job.birthdayPageId)) latestEmailJobByWish.set(job.birthdayPageId, job);
+  }
+
+  const openJobManager = (job: typeof emailCounts.jobs[number]) => {
+    setManageJob(job);
+    setManageTimeZone(job.timeZone);
+    setManageDateTime(localDateTimeInZone(new Date(job.scheduledAt), job.timeZone));
+    setJobActionError(null);
+  };
+
+  const manageEmailJob = async (action: 'reschedule' | 'cancel' | 'retry') => {
+    if (!manageJob || !supabase) return;
+    setJobActionError(null);
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!session) throw new Error('Please sign in again to manage scheduled emails.');
+      const url = `/api/birthday-email-jobs/${encodeURIComponent(manageJob.id)}`;
+      const response = action === 'cancel'
+        ? await fetch(url, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        })
+        : await fetch(url, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(action === 'reschedule'
+            ? { action, scheduledAt: dateTimeInZoneToUtc(manageDateTime, manageTimeZone), timeZone: manageTimeZone }
+            : { action }),
+        });
+      const result: unknown = await response.json();
+      if (!response.ok) {
+        const message = typeof result === 'object' && result !== null && 'error' in result && typeof result.error === 'string'
+          ? result.error
+          : 'Could not update this scheduled email.';
+        throw new Error(message);
+      }
+      setManageJob(null);
+      await loadWishes();
+    } catch (error) {
+      console.error(`Could not ${action} birthday email:`, error);
+      setJobActionError(error instanceof Error ? error.message : 'Could not update this scheduled email.');
+    }
+  };
 
   const filteredWishes = wishes.filter((w) => {
     if (filter === 'archived') return Boolean(w.isArchived);
@@ -311,7 +367,10 @@ export default function DashboardPage() {
           {[
             { label: 'Total Surprises Created', value: wishes.length, icon: <Gift className="h-4 w-4" />, color: 'bg-pink-100 text-pink-600' },
             { label: 'Published Websites', value: publishedCount, icon: <ExternalLink className="h-4 w-4" />, color: 'bg-emerald-100 text-emerald-600' },
-            { label: 'Emails Sent', value: emailCounts.total, icon: <Mail className="h-4 w-4" />, color: 'bg-amber-100 text-amber-600' },
+            { label: 'Emails Accepted', value: emailCounts.total, icon: <Mail className="h-4 w-4" />, color: 'bg-amber-100 text-amber-600' },
+            { label: 'Scheduled Emails', value: emailCounts.scheduled, icon: <Clock3 className="h-4 w-4" />, color: 'bg-blue-100 text-blue-600' },
+            { label: 'Failed Attempts', value: emailCounts.failedAttempts, icon: <Mail className="h-4 w-4" />, color: 'bg-rose-100 text-rose-600' },
+            { label: 'Delivered', value: emailCounts.delivered, icon: <Check className="h-4 w-4" />, color: 'bg-emerald-100 text-emerald-600' },
             { label: 'Total Views', value: totalViews, icon: <Eye className="h-4 w-4" />, color: 'bg-purple-100 text-purple-600' },
           ].map((metric) => (
             <div key={metric.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -320,6 +379,74 @@ export default function DashboardPage() {
               <p className="mt-1 text-xs font-semibold text-slate-500">{metric.label}</p>
             </div>
           ))}
+        </section>
+
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" aria-label="Birthday email and website history">
+          <div className="border-b border-slate-100 px-5 py-4">
+            <h2 className="text-lg font-black">Birthday History</h2>
+            <p className="mt-1 text-xs text-slate-500">Website status, delivery schedule, and email attempts for your creations.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1100px] text-left text-xs">
+              <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Recipient / birthday page</th>
+                  <th className="px-4 py-3">Template</th>
+                  <th className="px-4 py-3">Created</th>
+                  <th className="px-4 py-3">Scheduled delivery</th>
+                  <th className="px-4 py-3">Sender</th>
+                  <th className="px-4 py-3">Email status / attempts</th>
+                  <th className="px-4 py-3">Published URL</th>
+                  <th className="px-4 py-3">Manage</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredWishes.map((wish) => {
+                  const job = latestEmailJobByWish.get(wish.id);
+                  const attempts = job
+                    ? emailCounts.events.filter((event) => event.jobId === job.id).length
+                    : emailCounts.events.filter((event) => event.birthdayPageId === wish.id && !event.jobId).length;
+                  return (
+                    <tr key={wish.id} className="align-top">
+                      <td className="px-4 py-3">
+                        <p className="font-bold text-slate-800">{wish.recipientName}</p>
+                        <Link href={wish.isPublished ? `/w/${wish.slug}` : `/editor?id=${wish.id}`} target={wish.isPublished ? '_blank' : undefined} className="mt-1 inline-block max-w-52 truncate text-rose-600 hover:underline">
+                          {wish.greetingHeader || `${wish.recipientName}'s birthday page`}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3 capitalize">{wish.template}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">{new Date(wish.createdAt).toLocaleDateString()}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {job && (job.status === 'scheduled' || job.status === 'processing')
+                          ? `${new Date(job.scheduledAt).toLocaleString(undefined, { timeZone: job.timeZone })} (${job.timeZone})`
+                          : '—'}
+                      </td>
+                      <td className="px-4 py-3">{job?.senderDisplayName || wish.senderName}</td>
+                      <td className="px-4 py-3">
+                        <span className="font-bold capitalize">{job?.status || 'Not emailed'}</span>
+                        {job?.deliveryStatus && <span className="block text-slate-500 capitalize">Delivery: {job.deliveryStatus}</span>}
+                        {job && <span className="block text-slate-500">{job.attemptCount} attempt(s)</span>}
+                        {!job && attempts > 0 && <span className="block text-slate-500">{attempts} legacy attempt(s)</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        {wish.isPublished ? <a href={`/w/${wish.slug}`} target="_blank" rel="noreferrer" className="max-w-40 truncate text-rose-600 hover:underline">/w/{wish.slug}</a> : 'Draft'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" onClick={() => setDetailsWish(wish)} className="font-bold text-slate-600 hover:text-rose-600">Details</button>
+                          {job?.status === 'scheduled' && <button type="button" onClick={() => openJobManager(job)} className="font-bold text-blue-700 hover:underline">Reschedule / cancel</button>}
+                          {job?.status === 'failed' && <button type="button" onClick={() => openJobManager(job)} className="font-bold text-rose-700 hover:underline">Retry</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!loading && filteredWishes.length === 0 && (
+                  <tr><td colSpan={8} className="px-4 py-8 text-center text-slate-500">No birthday pages to show yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         {/* 1. INTERACTIVE VIBE CREATOR STUDIO (The interactive option picker) */}
@@ -606,16 +733,64 @@ export default function DashboardPage() {
               <button type="button" onClick={() => setDetailsWish(null)} aria-label="Close sending history" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">×</button>
             </div>
             <div className="mt-5 space-y-3">
+              {emailCounts.jobs.filter((job) => job.birthdayPageId === detailsWish.id).map((job) => (
+                <div key={job.id} className="rounded-xl border border-blue-100 bg-blue-50/50 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div><p className="font-semibold">{job.recipientEmail}</p><p className="text-xs text-slate-500">Sender: {job.senderDisplayName}</p></div>
+                    <span className={`rounded-full px-2 py-1 text-xs font-bold ${job.status === 'accepted' || job.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' : job.status === 'scheduled' || job.status === 'processing' ? 'bg-blue-100 text-blue-700' : job.status === 'failed' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{job.status}{job.deliveryStatus ? ` · ${job.deliveryStatus}` : ''}</span>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{job.attemptCount} attempt(s) · {new Date(job.scheduledAt).toLocaleString(undefined, { timeZone: job.timeZone })} ({job.timeZone})</p>
+                  {job.lastError && <p className="mt-1 text-xs text-rose-700">{job.lastError}</p>}
+                </div>
+              ))}
               {emailCounts.events.filter((event) => event.birthdayPageId === detailsWish.id).length === 0 ? (
-                <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No email send attempts recorded yet.</p>
+                emailCounts.jobs.filter((job) => job.birthdayPageId === detailsWish.id).length === 0
+                  ? <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No email send attempts recorded yet.</p>
+                  : null
               ) : emailCounts.events.filter((event) => event.birthdayPageId === detailsWish.id).map((event) => (
                 <div key={event.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 p-3 text-sm">
-                  <div><p className="font-semibold">{event.recipientEmail}</p><p className="text-xs text-slate-500">{new Date(event.createdAt).toLocaleString()}</p></div>
-                  <span className={`rounded-full px-2 py-1 text-xs font-bold ${event.status === 'accepted' || event.status === 'delivered' ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>{event.status === 'accepted' ? 'Accepted by provider' : event.status}</span>
+                  <div><p className="font-semibold">{event.recipientEmail}</p><p className="text-xs text-slate-500">{event.senderDisplayName ? `From ${event.senderDisplayName} · ` : ''}{new Date(event.createdAt).toLocaleString()}</p>{event.errorMessage && <p className="mt-1 text-xs text-rose-700">{event.errorMessage}</p>}</div>
+                  <span className={`rounded-full px-2 py-1 text-xs font-bold ${event.status === 'accepted' || event.status === 'delivered' ? 'bg-emerald-50 text-emerald-700' : event.status === 'pending' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'}`}>{event.status === 'accepted' ? `Accepted by provider${event.deliveryStatus ? ` · ${event.deliveryStatus}` : ''}` : event.status}</span>
                 </div>
               ))}
             </div>
-            <p className="mt-4 text-xs text-slate-500">Email status reflects provider acceptance. Delivery confirmation is not configured.</p>
+            <p className="mt-4 text-xs text-slate-500">Accepted means the provider accepted the request. Delivered status updates when the signed Resend webhook is configured.</p>
+          </section>
+        </div>
+      )}
+
+      {manageJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="manage-email-title">
+          <section className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id="manage-email-title" className="text-xl font-black">{manageJob.status === 'failed' ? 'Retry failed email' : 'Manage scheduled email'}</h2>
+                <p className="mt-1 text-sm text-slate-500">To {manageJob.recipientEmail} · {manageJob.status}</p>
+              </div>
+              <button type="button" onClick={() => setManageJob(null)} aria-label="Close email management" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100">×</button>
+            </div>
+            {manageJob.status === 'scheduled' && (
+              <div className="mt-5 space-y-3">
+                <label className="block text-xs font-semibold text-slate-600">Delivery date and time
+                  <input type="datetime-local" value={manageDateTime} onChange={(event) => setManageDateTime(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                </label>
+                <label className="block text-xs font-semibold text-slate-600">Time zone
+                  <input value={manageTimeZone} onChange={(event) => setManageTimeZone(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+                </label>
+              </div>
+            )}
+            {manageJob.lastError && <p className="mt-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{manageJob.lastError}</p>}
+            {jobActionError && <p role="alert" className="mt-4 rounded-lg bg-rose-50 p-3 text-xs text-rose-700">{jobActionError}</p>}
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => setManageJob(null)} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600">Close</button>
+              {manageJob.status === 'scheduled' && (
+                <>
+                  <button type="button" onClick={() => void manageEmailJob('cancel')} className="rounded-xl border border-rose-200 px-4 py-2 text-sm font-bold text-rose-700">Cancel email</button>
+                  <button type="button" onClick={() => void manageEmailJob('reschedule')} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white">Save schedule</button>
+                </>
+              )}
+              {manageJob.status === 'failed' && <button type="button" onClick={() => void manageEmailJob('retry')} className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-bold text-white">Retry now</button>}
+            </div>
           </section>
         </div>
       )}

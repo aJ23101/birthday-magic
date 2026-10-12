@@ -102,7 +102,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 SUPABASE_SERVICE_ROLE_KEY=your-server-only-service-role-key
 RESEND_API_KEY=your-resend-api-key
-RESEND_FROM_EMAIL="BirthdayMagic <birthday@your-verified-domain.com>"
+EMAIL_FROM="BirthdayMagic <birthday@your-verified-domain.com>"
+CRON_SECRET=replace-with-a-long-random-secret
+RESEND_WEBHOOK_SECRET=whsec_your_resend_webhook_signing_secret
 ```
 > **Note:** The application includes automatic local fallback. If Supabase keys are not set, it uses `localStorage` for drafts and Base64 for images, allowing you to run and test everything out of the box!
 >
@@ -113,9 +115,18 @@ To enable multi-device sync, open your Supabase project's **SQL Editor** and run
 ```bash
 supabase/schema.sql
 ```
-Then run [`supabase/migrations/202610120001_auth_dashboard.sql`](./supabase/migrations/202610120001_auth_dashboard.sql) in the SQL Editor to add account profiles, ownership-safe row-level security, archived/published timestamps, and private email-send history. New accounts use Supabase Auth; configure the Supabase Auth email templates and allowed redirect URLs for signup verification and password recovery.
+Then run these migrations in order in the SQL Editor:
 
-Email sharing is sent through Resend. Verify the sender domain/address in Resend and set `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, and the server-only Supabase service-role key in the deployment environment. The dashboard counts only emails accepted by Resend; delivery confirmation is not configured.
+1. [`supabase/migrations/202610120001_auth_dashboard.sql`](./supabase/migrations/202610120001_auth_dashboard.sql) adds profiles, owner-isolated birthday pages, and send-event history.
+2. [`supabase/migrations/202610120002_scheduled_birthday_email.sql`](./supabase/migrations/202610120002_scheduled_birthday_email.sql) adds scheduled jobs, atomic worker claims, attempt history, and delivery tracking.
+
+New accounts use Supabase Auth; configure Auth email templates and allowed redirect URLs for signup verification and password recovery.
+
+Email sending is centralized through Resend. Verify BirthdayMagic's sending domain/address with Resend, then set `RESEND_API_KEY` and `EMAIL_FROM` (for example, `BirthdayMagic <birthday@your-verified-domain.com>`). The actual sender address always comes from this server-side setting; users can only personalize the display name. `RESEND_FROM_EMAIL` remains a supported legacy fallback. Never expose these values or `SUPABASE_SERVICE_ROLE_KEY` in browser code.
+
+Scheduled messages are delivered by the Vercel Cron job in [`vercel.json`](./vercel.json), which checks for due jobs each minute. Set a long random `CRON_SECRET` in Vercel so only the scheduled invocation can run the worker. The worker claims jobs atomically in Supabase, uses Resend idempotency keys to prevent duplicate sends, and retries transient failures up to three attempts with backoff. The dashboard supports rescheduling, cancelling, and retrying failed jobs.
+
+For delivery confirmation, register `https://<your-production-domain>/api/webhooks/resend` in Resend for `email.delivered` and `email.bounced`, then set the signing secret as `RESEND_WEBHOOK_SECRET`. Without that optional webhook, the app reports provider acceptance separately from delivery.
 This automatically sets up:
 - The `wishes` table with indexing on `slug`
 - Row-Level Security (RLS) policies
@@ -139,7 +150,13 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
    - `NEXT_PUBLIC_SUPABASE_URL`
    - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
    - `NEXT_PUBLIC_APP_URL` (your deployed Vercel domain)
-5. Click **"Deploy"**.
+   - `SUPABASE_SERVICE_ROLE_KEY` (server-side only)
+   - `RESEND_API_KEY`
+   - `EMAIL_FROM` (a Resend-verified BirthdayMagic sender)
+   - `CRON_SECRET` (long random secret for the scheduled worker)
+   - `RESEND_WEBHOOK_SECRET` (optional; enables delivery/bounce reporting)
+6. Run both Supabase migrations above, configure Auth redirect URLs, and register the optional Resend webhook.
+7. Click **"Deploy"**. The production deployment runs the one-minute cron schedule in `vercel.json`.
 
 ---
 

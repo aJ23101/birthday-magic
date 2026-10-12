@@ -253,51 +253,115 @@ export async function getUserWishes(): Promise<BirthdayWishData[]> {
   return initLocalSampleWishes();
 }
 
-export async function getUserAcceptedEmailCounts(): Promise<{
+export async function getUserEmailDashboardData(): Promise<{
   total: number;
+  scheduled: number;
+  failedAttempts: number;
+  delivered: number;
   byWish: Record<string, number>;
   events: Array<{
     id: string;
     birthdayPageId: string;
+    jobId: string | null;
     recipientEmail: string;
+    senderDisplayName: string;
     status: string;
+    deliveryStatus: string | null;
     createdAt: string;
     providerMessageId: string | null;
+    errorMessage: string | null;
+  }>;
+  jobs: Array<{
+    id: string;
+    birthdayPageId: string;
+    recipientEmail: string;
+    senderDisplayName: string;
+    scheduledAt: string;
+    timeZone: string;
+    status: string;
+    deliveryStatus: string | null;
+    attemptCount: number;
+    maxAttempts: number;
+    providerMessageId: string | null;
+    lastError: string | null;
+    createdAt: string;
   }>;
 }> {
-  if (!isSupabaseConfigured || !supabase) return { total: 0, byWish: {}, events: [] };
+  const empty = { total: 0, scheduled: 0, failedAttempts: 0, delivered: 0, byWish: {}, events: [], jobs: [] };
+  if (!isSupabaseConfigured || !supabase) return empty;
 
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError) throw authError;
-  if (!user) return { total: 0, byWish: {}, events: [] };
+  if (!user) return empty;
 
-  const { data, error } = await supabase
-    .from('birthday_send_events')
-    .select('id, birthday_page_id, recipient_email, status, created_at, provider_message_id')
-    .eq('user_id', user.id);
+  const [eventsResult, jobsResult] = await Promise.all([
+    supabase
+      .from('birthday_send_events')
+      .select('id, birthday_page_id, email_job_id, recipient_email, sender_display_name, status, delivery_status, created_at, provider_message_id, error_message')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('birthday_email_jobs')
+      .select('id, birthday_page_id, recipient_email, sender_display_name, scheduled_at, timezone, status, delivery_status, attempt_count, max_attempts, provider_message_id, last_error, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false }),
+  ]);
 
-  if (error) {
-    console.error('Could not load accepted birthday email history:', error);
-    throw error;
+  if (eventsResult.error) {
+    console.error('Could not load birthday email attempt history:', eventsResult.error);
+    throw eventsResult.error;
+  }
+  if (jobsResult.error) {
+    console.error('Could not load scheduled birthday emails:', jobsResult.error);
+    throw jobsResult.error;
   }
 
+  const data = eventsResult.data || [];
+  const jobs = jobsResult.data || [];
   const byWish: Record<string, number> = {};
-  for (const event of data || []) {
-    if (event.status === 'accepted' || event.status === 'delivered') {
+  for (const event of data) {
+    if (!event.email_job_id && (event.status === 'accepted' || event.status === 'delivered')) {
       byWish[event.birthday_page_id] = (byWish[event.birthday_page_id] || 0) + 1;
     }
   }
-  const acceptedEvents = (data || []).filter((event) => event.status === 'accepted' || event.status === 'delivered');
+  const acceptedJobs = jobs.filter((job) => job.status === 'accepted' || job.status === 'delivered');
+  for (const job of acceptedJobs) {
+    byWish[job.birthday_page_id] = (byWish[job.birthday_page_id] || 0) + 1;
+  }
+  const legacyAccepted = data.filter((event) => !event.email_job_id && (event.status === 'accepted' || event.status === 'delivered'));
   return {
-    total: acceptedEvents.length,
+    total: acceptedJobs.length + legacyAccepted.length,
+    scheduled: jobs.filter((job) => job.status === 'scheduled' || job.status === 'processing').length,
+    failedAttempts: data.filter((event) => event.status === 'failed').length,
+    delivered: jobs.filter((job) => job.delivery_status === 'delivered').length +
+      data.filter((event) => !event.email_job_id && event.status === 'delivered').length,
     byWish,
-    events: (data || []).map((event) => ({
+    events: data.map((event) => ({
       id: event.id,
       birthdayPageId: event.birthday_page_id,
+      jobId: event.email_job_id,
       recipientEmail: event.recipient_email,
+      senderDisplayName: event.sender_display_name || '',
       status: event.status,
+      deliveryStatus: event.delivery_status,
       createdAt: event.created_at,
       providerMessageId: event.provider_message_id,
+      errorMessage: event.error_message,
+    })),
+    jobs: jobs.map((job) => ({
+      id: job.id,
+      birthdayPageId: job.birthday_page_id,
+      recipientEmail: job.recipient_email,
+      senderDisplayName: job.sender_display_name,
+      scheduledAt: job.scheduled_at,
+      timeZone: job.timezone,
+      status: job.status,
+      deliveryStatus: job.delivery_status,
+      attemptCount: job.attempt_count,
+      maxAttempts: job.max_attempts,
+      providerMessageId: job.provider_message_id,
+      lastError: job.last_error,
+      createdAt: job.created_at,
     })),
   };
 }

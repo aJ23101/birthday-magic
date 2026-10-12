@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   X,
@@ -10,13 +10,13 @@ import {
   QrCode,
   Sparkles,
   Share2,
-  Heart,
   MessageCircle,
   Mail,
   LoaderCircle,
 } from 'lucide-react';
 import { BirthdayWishData } from '@/types/birthday';
 import { supabase } from '@/lib/supabase';
+import { dateTimeInZoneToUtc, localDateTimeInZone } from '@/lib/schedule-time';
 import Link from 'next/link';
 
 interface ShareModalProps {
@@ -37,6 +37,21 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [recipientEmail, setRecipientEmail] = useState('');
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [emailStatus, setEmailStatus] = useState<string | null>(null);
+  const [deliveryMode, setDeliveryMode] = useState<'now' | 'scheduled'>('now');
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [scheduledTime, setScheduledTime] = useState('00:00');
+  const [timeZone, setTimeZone] = useState('UTC');
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      setTimeZone(zone);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      setScheduledDate(localDateTimeInZone(tomorrow, zone).slice(0, 10));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   if (!isOpen) return null;
 
@@ -71,13 +86,20 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         setEmailStatus('Sign in to send and track birthday emails.');
         return;
       }
+      let scheduledAt: string | undefined;
+      if (deliveryMode === 'scheduled') {
+        scheduledAt = dateTimeInZoneToUtc(`${scheduledDate}T${scheduledTime}`, timeZone);
+      }
       const response = await fetch(`/api/birthday-pages/${encodeURIComponent(wish.id)}/email`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${session.access_token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ recipientEmail }),
+        body: JSON.stringify({
+          recipientEmail,
+          ...(scheduledAt ? { scheduledAt, timeZone } : {}),
+        }),
       });
       const result: unknown = await response.json();
       if (!response.ok) {
@@ -87,7 +109,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             : 'The email could not be sent.';
         throw new Error(errorMessage);
       }
-      setEmailStatus('Email accepted by the provider and recorded in your dashboard.');
+      const accepted = typeof result === 'object' && result !== null && 'accepted' in result && result.accepted === true;
+      setEmailStatus(accepted
+        ? 'Email accepted by the provider and recorded in your dashboard.'
+        : 'Birthday email scheduled. You can manage it from your dashboard.');
       setRecipientEmail('');
       onEmailSent?.();
     } catch (sendError: unknown) {
@@ -211,6 +236,29 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 Send
               </button>
             </div>
+            <div className="mt-3 flex gap-2" role="group" aria-label="Email delivery time">
+              <button type="button" onClick={() => setDeliveryMode('now')} aria-pressed={deliveryMode === 'now'} className={`rounded-lg px-3 py-2 text-xs font-bold ${deliveryMode === 'now' ? 'bg-rose-600 text-white' : 'bg-white text-slate-600'}`}>Send now</button>
+              <button type="button" onClick={() => setDeliveryMode('scheduled')} aria-pressed={deliveryMode === 'scheduled'} className={`rounded-lg px-3 py-2 text-xs font-bold ${deliveryMode === 'scheduled' ? 'bg-rose-600 text-white' : 'bg-white text-slate-600'}`}>Schedule</button>
+            </div>
+            {deliveryMode === 'scheduled' && (
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <label className="text-xs font-semibold text-slate-600">
+                  Delivery date
+                  <input required type="date" value={scheduledDate} onChange={(event) => setScheduledDate(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm" />
+                </label>
+                <label className="text-xs font-semibold text-slate-600">
+                  Delivery time
+                  <input required type="time" value={scheduledTime} onChange={(event) => setScheduledTime(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm" />
+                </label>
+                <label className="col-span-2 text-xs font-semibold text-slate-600">
+                  Time zone
+                  <input required value={timeZone} onChange={(event) => setTimeZone(event.target.value)} placeholder="America/New_York" className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" />
+                </label>
+              </div>
+            )}
+            <p className="mt-2 text-xs text-slate-500">
+              Sent from BirthdayMagic as “{wish.senderName || 'A birthday friend'} via BirthdayMagic”. BirthdayMagic&apos;s verified address is used for every email.
+            </p>
             {emailStatus && <p role="status" className="mt-2 text-xs text-slate-600">{emailStatus}</p>}
             {!wish.isPublished && <p className="mt-2 text-xs text-amber-700">Publish this birthday website before emailing its link.</p>}
             {!supabase && <p className="mt-2 text-xs text-slate-500">Email sends are unavailable in local-only mode.</p>}
